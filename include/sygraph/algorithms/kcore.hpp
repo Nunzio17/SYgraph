@@ -152,10 +152,31 @@ public:
     });
     e_init.wait();
 
+    // Compute max degree of the graph with SYCL reduction for max number
+    edge_t max_degree = 0;
+    sycl::buffer<edge_t, 1> max_buf(&max_degree, sycl::range<1>(1));
+
+    queue.submit([&](sycl::handler& cgh) {
+      auto max_reduction = sycl::reduction(max_buf, cgh, sycl::maximum<edge_t>());
+      cgh.parallel_for(sycl::range<1>(n), max_reduction, [=](sycl::id<1> i, auto& max){
+        max.combine(degree[i[0]]);
+      });
+    }).wait();
+
+    max_degree = max_buf.get_host_access();
+
     sygraph::Event e;
 
-    // compute operator for mark vertex as removed, set core number of v and count nodes_removed
-    // or put everything in advance...
+    // compute operator for mark vertex as removed, set core number of v
+    auto compute_step = [&]() {
+      return sygraph::operators::compute::execute<frontier_view_t::vertex>(
+        G,
+        in_frontier,
+        [=](auto v){
+          removed[v] = 1;
+          core[v] = k;
+        }):
+    };
 
     auto push_step = [&]() {
       return sygraph::operators::advance::frontier<load_balance_t::workgroup_mapped, frontier_view_t::vertex, frontier_view_t::vertex>(
@@ -163,7 +184,14 @@ public:
         in_frontier,
         out_frontier,
         [=](auto src, auto dst, auto edge, auto weight) -> bool {
-          //TODO
+          if(removed[dst]){
+            return false;
+          }
+          sycl::atomic_ref<edge_t, sycl::memory_order::relaxed, sycl::memory_scope::device> ref(degree[dst]);
+          old_deg = ref.fetch_sub(1);
+          if((old_deg - 1) < k){
+            return true;
+          }
         },
         sygraph::frontier::size::fetch_from_memory);
     };
@@ -182,12 +210,21 @@ public:
 
     bool push = direction != kcore_direction::pull;
 
-    // TODO compute max degree of the graph...
-
     while (k <= max_degree) {
-      // TODO: populate frontier for each iteration of the loop
+      //Populate frontier for each iteration of the loop (for now with cpu)
+      for(size_t v = 0; v < n; v++){
+        if(!removed[v] && degree[v] <= k){
+          in_frontier.insert(v);
+        }
+      }
 
       while (!in_frontier.empty()) {
+
+        e = compute_step();
+        e.waitAndThrow();
+#ifdef ENABLE_PROFILING
+sygraph::Profiler::addEvent(e, "compute");
+#endif
         if(push) {
           e = push_step();
         }
