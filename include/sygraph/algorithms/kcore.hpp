@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 University of Salerno
+ * Copyright (c) 2026 University of Salerno
  * SPDX-License-Identifier: Apache-2.0
  */
 #pragma once
@@ -31,7 +31,7 @@ enum class kcore_direction { push, pull };
 struct KCORERunDetails {
   size_t iterations = 0;
   int max_core = 0;
-  };
+};
 
 namespace detail {
 /**
@@ -175,7 +175,7 @@ public:
         [=](auto v){
           removed[v] = 1;
           core[v] = k;
-        }):
+        });
     };
 
     auto push_step = [&]() {
@@ -188,9 +188,12 @@ public:
             return false;
           }
           sycl::atomic_ref<edge_t, sycl::memory_order::relaxed, sycl::memory_scope::device> ref(degree[dst]);
-          old_deg = ref.fetch_sub(1);
+          auto old_deg = ref.fetch_sub(1);
           if((old_deg - 1) < k){
             return true;
+          }
+          else{
+            return false;
           }
         },
         sygraph::frontier::size::fetch_from_memory);
@@ -249,11 +252,11 @@ sygraph::Profiler::addEvent(e, "advance");
   /**
    * @brief Returns the the core number of a vertex.
    * 
-   * @param vertex The vertex for which to get the distance.
+   * @param vertex The vertex for which to get the core number.
    * @return A core number.
    */
-  edge_t* getCoreNumber() {
-    // TODO: return core number of a specified vertex.
+  edge_t getCoreNumber(size_t vertex) const {
+    return _instance->core[vertex];
   }
   
   /**
@@ -261,8 +264,11 @@ sygraph::Profiler::addEvent(e, "advance");
    * 
    * @return A vector of core numbers.
    */
-  std::vector<vertex_t> getCoreNumbers() {
-    // TODO: return the core numbers of all vertices.
+  std::vector<edge_t> getCoreNumbers() const {
+    std::vector<edge_t> cores(_instance->G.getVertexCount());
+    sycl::queue& queue = _instance->G.getQueue();
+    queue.copy(_instance->core, cores.data(), cores.size()).wait();
+    return cores;
   }
 
 private:
