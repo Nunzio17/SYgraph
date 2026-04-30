@@ -163,7 +163,7 @@ public:
       });
     }).wait();
 
-    max_degree = max_buf.get_host_access();
+    max_degree = max_buf.get_host_access()[0];
 
     sygraph::Event e;
 
@@ -189,7 +189,7 @@ public:
           }
           sycl::atomic_ref<edge_t, sycl::memory_order::relaxed, sycl::memory_scope::device> ref(degree[dst]);
           auto old_deg = ref.fetch_sub(1);
-          if((old_deg - 1) < k){
+          if((old_deg - 1) <= k){
             return true;
           }
           else{
