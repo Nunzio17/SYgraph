@@ -214,12 +214,14 @@ public:
     bool push = direction != kcore_direction::pull;
 
     while (k <= max_degree) {
-      //Populate frontier for each iteration of the loop (for now with cpu)
-      for(size_t v = 0; v < n; v++){
-        if(!removed[v] && degree[v] <= k){
-          in_frontier.insert(v);
-        }
-      }
+      auto device_frontier = in_frontier.getDeviceFrontier();
+      queue.submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i){
+          if (!removed[i[0]] && degree[i[0]] <= k) {
+            device_frontier.insert(i[0]);
+          }
+        });
+      }).wait();
 
       while (!in_frontier.empty()) {
 
@@ -242,10 +244,32 @@ sygraph::Profiler::addEvent(e, "advance");
         out_frontier.clear();
         iter++;
       }
-      k++;
+
+      edge_t next_k = max_degree + 1;
+      sycl::buffer<edge_t, 1> min_buf(&next_k, sycl::range<1>(1));
+      queue.submit([&](sycl::handler& cgh) {
+        auto min_reduction = sycl::reduction(min_buf, cgh, sycl::minimum<edge_t>());
+        cgh.parallel_for(sycl::range<1>(n), min_reduction, [=](sycl::id<1> i, auto& min){
+          if(!removed[i[0]]){
+            min.combine(degree[i[0]]);
+          }
+        });
+      }).wait();
+      k = static_cast<int>(min_buf.get_host_access()[0]);
     }
     details.iterations = iter;
-    details.max_core = k - 1;
+    
+    edge_t max_core_val = 0;
+    sycl::buffer<edge_t, 1> max_core_buf(&max_core_val, sycl::range<1>(1));
+
+    queue.submit([&](sycl::handler& cgh) {
+      auto max_reduction = sycl::reduction(max_core_buf, cgh, sycl::maximum<edge_t>());
+      cgh.parallel_for(sycl::range<1>(n), max_reduction, [=](sycl::id<1> i, auto& max){
+        max.combine(core[i[0]]);
+      });
+    }).wait();
+
+    details.max_core = static_cast<int>(max_core_buf.get_host_access()[0]);
     return details;
   }
 
