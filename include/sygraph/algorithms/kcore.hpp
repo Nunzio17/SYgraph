@@ -151,17 +151,24 @@ public:
       });
     });
     e_init.wait();
+#ifdef ENABLE_PROFILING
+sygraph::Profiler::addEvent(e_init, "e_init_degree");
+#endif
 
     // Compute max degree of the graph with SYCL reduction for max number
     edge_t max_degree = 0;
     sycl::buffer<edge_t, 1> max_buf(&max_degree, sycl::range<1>(1));
 
-    queue.submit([&](sycl::handler& cgh) {
+    auto e_max_deg = queue.submit([&](sycl::handler& cgh) {
       auto max_reduction = sycl::reduction(max_buf, cgh, sycl::maximum<edge_t>());
       cgh.parallel_for(sycl::range<1>(n), max_reduction, [=](sycl::id<1> i, auto& max){
         max.combine(degree[i[0]]);
       });
-    }).wait();
+    });
+    e_max_deg.wait();
+#ifdef ENABLE_PROFILING
+sygraph::Profiler::addEvent(e_max_deg, "e_max_deg");
+#endif
 
     max_degree = max_buf.get_host_access()[0];
 
@@ -207,6 +214,7 @@ public:
         out_frontier,
         [=](auto src, auto dst, auto edge, auto weight) -> bool {
           //TODO
+          return false;
         },
         sygraph::frontier::size::fetch_from_memory);
     };
@@ -215,13 +223,17 @@ public:
 
     while (k <= max_degree) {
       auto device_frontier = in_frontier.getDeviceFrontier();
-      queue.submit([&](sycl::handler& cgh) {
+      auto e_insert = queue.submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i){
           if (!removed[i[0]] && degree[i[0]] <= k) {
             device_frontier.insert(i[0]);
           }
         });
-      }).wait();
+      });
+      e_insert.wait();
+#ifdef ENABLE_PROFILING
+sygraph::Profiler::addEvent(e_insert, "e_insert");
+#endif
 
       while (!in_frontier.empty()) {
 
@@ -247,14 +259,18 @@ sygraph::Profiler::addEvent(e, "advance");
 
       edge_t next_k = max_degree + 1;
       sycl::buffer<edge_t, 1> min_buf(&next_k, sycl::range<1>(1));
-      queue.submit([&](sycl::handler& cgh) {
+      auto e_min = queue.submit([&](sycl::handler& cgh) {
         auto min_reduction = sycl::reduction(min_buf, cgh, sycl::minimum<edge_t>());
         cgh.parallel_for(sycl::range<1>(n), min_reduction, [=](sycl::id<1> i, auto& min){
           if(!removed[i[0]]){
             min.combine(degree[i[0]]);
           }
         });
-      }).wait();
+      });
+      e_min.wait();
+#ifdef ENABLE_PROFILING
+sygraph::Profiler::addEvent(e_min, "e_min");
+#endif
       k = static_cast<int>(min_buf.get_host_access()[0]);
     }
     details.iterations = iter;
@@ -262,12 +278,16 @@ sygraph::Profiler::addEvent(e, "advance");
     edge_t max_core_val = 0;
     sycl::buffer<edge_t, 1> max_core_buf(&max_core_val, sycl::range<1>(1));
 
-    queue.submit([&](sycl::handler& cgh) {
+    auto e_maxcore = queue.submit([&](sycl::handler& cgh) {
       auto max_reduction = sycl::reduction(max_core_buf, cgh, sycl::maximum<edge_t>());
       cgh.parallel_for(sycl::range<1>(n), max_reduction, [=](sycl::id<1> i, auto& max){
         max.combine(core[i[0]]);
       });
-    }).wait();
+    });
+    e_maxcore.wait();
+#ifdef ENABLE_PROFILING
+sygraph::Profiler::addEvent(e_maxcore, "e_maxcore");
+#endif
 
     details.max_core = static_cast<int>(max_core_buf.get_host_access()[0]);
     return details;
@@ -291,7 +311,11 @@ sygraph::Profiler::addEvent(e, "advance");
   std::vector<edge_t> getCoreNumbers() const {
     std::vector<edge_t> cores(_instance->G.getVertexCount());
     sycl::queue& queue = _instance->G.getQueue();
-    queue.copy(_instance->core, cores.data(), cores.size()).wait();
+    auto e_copy = queue.copy(_instance->core, cores.data(), cores.size());
+    e_copy.wait();
+#ifdef ENABLE_PROFILING
+sygraph::Profiler::addEvent(e_copy, "e_copy");
+#endif
     return cores;
   }
 
