@@ -391,7 +391,9 @@ public:
     size_t size = bitmap.getBitmapSize(1);
     uint32_t range = bitmap.getBitmapRange();
     // sycl::range<1> global_range{(size > local_range[0] ? size + local_range[0] - (size % local_range[0]) : local_range[0])};
-    size_t global_size = sygraph::detail::device::getNumComputeUnits(_queue) * local_range[0];
+    size_t cu_global   = sygraph::detail::device::getNumComputeUnits(_queue) * local_range[0];
+    size_t need_global = ((size + local_range[0] - 1) / local_range[0]) * local_range[0];  // size = getBitmapSize(1)
+    size_t global_size = (need_global > cu_global) ? need_global : cu_global;
     sycl::range<1> global_range{global_size};
 
     auto e = this->_queue.submit([&](sycl::handler& cgh) {
